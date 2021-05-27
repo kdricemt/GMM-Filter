@@ -1,9 +1,6 @@
-% GMM KF
-% reference: 
+% GMM EKF
 % Debdipta Goswami and Derek A. Paley "Non-Gaussian Estimation and Dynamic 
 % Output Feedback Using the Gaussian Mixture Kalman Filter", JGCD, 2021
-
-
 clear all; close all;
 rng(1)
 
@@ -11,21 +8,58 @@ rng(1)
 % x(n+1) = Ax(n) + Bu(n) + W(n)
 % y(n) = Cx(n) + V(n)
 % u(n) = -Ux(n)
-
-A = [1.0 0.9;
-     -0.5 1.2];
-B = eye(2);
-C = eye(2);
-K_V = 0.1 * eye(2);
-U = [0.5 0;
-     0 0.7];
+test_case = 1;
 
 n     = 2;  % state dimension
 m     = 2;  % observation dimension
 T     = 15; % number of timesteps
-M     = 3;  % complexity of GMM 
+M     = 3;  % complexity of GMM (of init state estimate)
 M_max = 4;  % maximum complexity of GMM
 sigma_threshold = 10.0;
+
+switch test_case
+    case 1
+        dynfun = @(x) dynfun1(x);
+        % Initial X Distribution  -------------------------------------------------
+        x0_w_true = zeros(1,M);
+        x0_mu_true = zeros(M,n);
+        x0_Sigma_true = zeros(n,n,M);
+
+        x0_w_true(1) = 0.3;
+        x0_mu_true(1,:) = [-3 -1];
+        x0_Sigma_true(:,:,1) = 0.2*eye(2);
+
+        x0_w_true(2) = 0.3;
+        x0_mu_true(2,:) = [3  1];
+        x0_Sigma_true(:,:,2) = 0.5*eye(2);
+
+        x0_w_true(3) = 0.4;
+        x0_mu_true(3,:) = [0  0];
+        x0_Sigma_true(:,:,3) = 0.2*eye(2);
+        
+    case 2
+        
+        dynfun = @(x) dynfun2(x);
+        % Initial X Distribution  -------------------------------------------------
+        x0_w_true = zeros(1,M);
+        x0_mu_true = zeros(M,n);
+        x0_Sigma_true = zeros(n,n,M);
+
+        x0_w_true(1) = 0.3;
+        x0_mu_true(1,:) = [-1 -1];
+        x0_Sigma_true(:,:,1) = 0.2*eye(2);
+
+        x0_w_true(2) = 0.3;
+        x0_mu_true(2,:) = [1  1];
+        x0_Sigma_true(:,:,2) = 0.5*eye(2);
+
+        x0_w_true(3) = 0.4;
+        x0_mu_true(3,:) = [0  0];
+        x0_Sigma_true(:,:,3) = 0.2*eye(2);        
+end
+
+C = eye(2);
+K_V = 0.1 * eye(2);
 
 % True Noise Model (W) ------------------------------------------------
 M_W = 3;
@@ -59,22 +93,6 @@ end
 GModel_W = fitgmdist(phi_W,1);
 K_W = GModel_W.Sigma;
 
-% Initial X Distribution  -------------------------------------------------
-x0_w_true = zeros(1,M);
-x0_mu_true = zeros(M,n);
-x0_Sigma_true = zeros(n,n,M);
-
-x0_w_true(1) = 0.3;
-x0_mu_true(1,:) = [-3 -1];
-x0_Sigma_true(:,:,1) = 0.2*eye(2);
-
-x0_w_true(2) = 0.3;
-x0_mu_true(2,:) = [3  1];
-x0_Sigma_true(:,:,2) = 0.5*eye(2);
-
-x0_w_true(3) = 0.4;
-x0_mu_true(3,:) = [0  0];
-x0_Sigma_true(:,:,3) = 0.2*eye(2);
 
 x0_gm_true = gmdistribution(x0_mu_true,x0_Sigma_true,x0_w_true);
 
@@ -87,6 +105,7 @@ x0 = genSampleGMM(1,x0_w_true,x0_mu_true,x0_Sigma_true);
 x_true(:,1) = x0;
     
 %% Initial GMM Estimation using EM algorithm
+N = 200;
 phi_x0 = genSampleGMM(N,x0_w_true,x0_mu_true,x0_Sigma_true);
 [w0,mu0,Sigma0,M] = sampleFitGMM(phi_x0,M_max);
 
@@ -117,7 +136,6 @@ for j = 1:M
    X_hat(:,1) = X_hat(:,1) + w0(j).*x_hat(:,j,1);
 end
 
-u(:,1) = -U * X_hat(:,1);
 x_diff(:,1) = x_true(:,1) - x_hat(:,1);
 x_diff_norm(1) = norm(x_diff(:,1));
 
@@ -131,14 +149,14 @@ for t = 2:T
     W = genSampleGMM(1,W_w_true,W_mu_true,W_Sigma_true);
     
     % propagate true orbit
-    x_true(:,t) = A * x_true(:,t-1) + B*u(:,t-1) + W';
+    [x_true(:,t),~,u(:,t-1)] = dynfun(x_true(:,t-1));
     
     % generate observation
     y(:,t) = C*x_true(:,t) + mvnrnd(zeros(n,1),K_V,1)';
     
     % Time Update --------------------------------------------------------
     for j = 1:M
-        AA = A - B*U;
+        [~,AA,~] = dynfun(x_hat(:,j,t-1));
         x_bar(:,j,t) = AA * x_hat(:,j,t-1);
         S(:,:,j,t)   = AA * Sigma(:,:,j,t-1) * AA' + K_W;
         w_bar(j,t)   = w_hat(j,t-1);
@@ -149,21 +167,21 @@ for t = 2:T
     if ~isempty(find(S(:,:,:,t) > sigma_threshold))
         disp('Resample GMM')
         % Generate Samples from previous xhat
-        N = 100;
-        phi_xhat = genSampleGMM(N,w_hat(1:M,t-1),x_hat(:,1:M,t-1),Sigma(:,:,1:M,t-1));
+        N = 500;
+        phi_xhat = genSampleGMM(N,w_hat(1:M,t-1),x_hat(:,1:M,t-1)',Sigma(:,:,1:M,t-1));
 
         % Propagate the samples
         phi_xbar = zeros(size(phi_xhat));
         for ii = 1:N
-            phi_xbar(ii,:) =  A * x_hat(:,j,t-1) + B*u(:,t-1);
+            [phi_xbar(ii,:),~,~] =  dynfun(phi_xhat(ii,:));
         end
 
         % Fit GMM
         % note that M could be changed here.
         [w_new,mu_new,S_new,M] = sampleFitGMM(phi_xbar,M_max);
-        w_bar(:,t) = w_new;
-        x_bar(:,:,t) = mu_new';
-        S(:,:,:,t) = S_new;
+        w_bar(1:M,t) = w_new;
+        x_bar(:,1:M,t) = mu_new';
+        S(:,:,1:M,t) = S_new;
     end
     
     % 3. Meas Update -----------------------------------------------------
@@ -194,15 +212,12 @@ for t = 2:T
        X_hat(:,t) = X_hat(:,t) + w_t(j).*x_hat(:,j,t);
     end
     
-    
-    % 4. Calc Control ------------------------------------------------------
-    u(:,t) = -U * X_hat(:,t);
     x_diff(:,t) = x_true(:,t) - X_hat(:,t);
     x_diff_norm(t) = norm(x_diff(:,t));
     
     M_size(t) = M;
     
-    disp(['Time Step:',num2str(t),' |Xhat - X|:',num2str(x_diff_norm(t))]);
+    disp(['Time Step:',num2str(t-1),' |Xhat - X|:',num2str(x_diff_norm(t))]);
 end
 
 
@@ -230,7 +245,7 @@ if isplot
         ti = plot_ts(ii);
         gmPDF = @(x,y) arrayfun(@(x0,y0) pdf(GMMModel{ti},[x0 y0]),x,y);
         fsurf(gmPDF,[-5 5])
-        legend({['t: ',num2str(ti)]}, 'Location','northeast');
+        legend({['t: ',num2str(ti-1)]}, 'Location','northeast');
     end
     xlabel('X');
     ylabel('Y');
@@ -245,8 +260,8 @@ if isplot
     plot(x_true(1,:), x_true(2,:), 'ro-');
     plot(X_hat(1,:), X_hat(2,:), 'bo-');
     for ti = 1:T
-        text(x_true(1,ti)+0.1, x_true(2,ti)+0.1, num2str(ti-1));
-        text(X_hat(1,ti)+0.1, X_hat(2,ti)+0.1, num2str(ti-1));
+        text(x_true(1,ti)+0.02, x_true(2,ti)+0.02, num2str(ti-1));
+        text(X_hat(1,ti)+0.02, X_hat(2,ti)+0.02, num2str(ti-1));
     end
     xlabel('x');
     ylabel('y');
@@ -259,6 +274,24 @@ if isplot
 end
 
 %%
+function [x_next, A, u] = dynfun1(x)
+   % Duffling Oscillator
+   a1 = 2.75;
+   a2 = 0.2;
+   
+   u = zeros(2,1);
+   x_next = [x(2); -a2*x(1) + a1*x(2) - x(2)^3] + u;  % next state (dyn + control)
+   
+   A      = [0 1; -a2, a1 - 3*x(2)^2];            % A - BU
+end
+
+function [x_next, A, u] = dynfun2(x)
+   u      = [0; 0.3*x(1)*x(2)];
+   x_next = [x(2); -1.1*x(1)*x(2)] + u; % next state (dyn + control)
+   A      = [0 1; -0.8*x(2), -0.8*x(1)];   % A - BU
+end
+
+
 function phi = genSampleGMM(N,w,mu,Sigma)
     n = size(mu,2);
     M = length(w);
@@ -283,8 +316,19 @@ function [w,mu,Sigma,M] = sampleFitGMM(phi,M_max)
     GMModel = cell(1,M_max);
 
     for j = 1:M_max
-        GMModel{j} = fitgmdist(phi,j);  % fitting using EM Algorithm
-        BIC(:,j) = GMModel{j}.BIC;
+        is_err = 0;
+        try
+            GMModel{j} = fitgmdist(phi,j);  % fitting using EM Algorithm
+        catch exception
+            disp(['Fitting Error! M:',num2str(j)]);
+            is_err = 1;
+        end
+        
+        if ~is_err
+            BIC(:,j) = GMModel{j}.BIC;
+        else
+            BIC(:,j) = Inf;
+        end
     end
     [bestBIC,bestM] = min(BIC);
 
