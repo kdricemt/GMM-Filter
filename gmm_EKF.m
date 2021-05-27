@@ -8,7 +8,7 @@ rng(1)
 % x(n+1) = Ax(n) + Bu(n) + W(n)
 % y(n) = Cx(n) + V(n)
 % u(n) = -Ux(n)
-test_case = 1;
+test_case = 2;
 
 n     = 2;  % state dimension
 m     = 2;  % observation dimension
@@ -156,8 +156,7 @@ for t = 2:T
     
     % Time Update --------------------------------------------------------
     for j = 1:M
-        [~,AA,~] = dynfun(x_hat(:,j,t-1));
-        x_bar(:,j,t) = AA * x_hat(:,j,t-1);
+        [x_bar(:,j,t),AA,~] = dynfun(x_hat(:,j,t-1));
         S(:,:,j,t)   = AA * Sigma(:,:,j,t-1) * AA' + K_W;
         w_bar(j,t)   = w_hat(j,t-1);
     end
